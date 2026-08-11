@@ -1,0 +1,101 @@
+# Analysis script
+# Placeholder for analysis code.
+# Analyze the measurement model estimates
+# Set the working directory
+setwd("C:/Users/User/OneDrive - KU Leuven/0. Postdoc Leuven/1. Papers/Paper 1/R/Simulation")
+setwd("C:/Users/u0159267/OneDrive - KU Leuven/0. Postdoc Leuven/1. Papers/Paper 1/R/Simulation")
+
+# Load libraries
+library(dplyr)
+library(clue)
+library(ggplot2)
+library(tidyr)
+
+# Create necessary objects 
+cond <- 432
+K    <- 50
+data <- numeric(cond*K)
+
+# Load the design matrix
+load("C:/Users/User/OneDrive - KU Leuven/0. Postdoc Leuven/1. Papers/Paper 1/R/Simulation/Fit/design.Rdata")
+load("C:/Users/u0159267/OneDrive - KU Leuven/0. Postdoc Leuven/1. Papers/Paper 1/R/Simulation/Fit/design.Rdata")
+
+exp_design           <- design[rep(seq_len(nrow(design)), each = K), ] # Expanded design matrix
+exp_design$Condition <- rep(1:cond, each = K)
+exp_design$Repe      <- rep(1:K, times = cond)
+exp_design$model     <- NULL # remove the model column
+last_idx             <- ncol(exp_design)
+exp_design           <- exp_design[, c((last_idx - 1), last_idx, (1:(last_idx - 2)))] # Reorder columns
+
+# Add the columns to store the final results
+exp_design$Times <- NA
+rownames(exp_design) <- NULL
+
+# Create new loading function
+new_load <- function(file) {
+  # Create a temporary environment to load the data into
+  temp_env <- new.env()
+  
+  # Load the file into that specific environment
+  loaded_names <- load(file, envir = temp_env)
+  
+  # Check if the file contained more than one object
+  if (length(loaded_names) > 1) {
+    warning("The file contains multiple objects. Returning a list of all objects.")
+    return(as.list(temp_env))
+  }
+  
+  # Return the single object
+  return(temp_env[[loaded_names]])
+}
+
+# Make it safe to not stop when finding an error
+load_safe <- purrr::safely(new_load)
+
+# Load and analyze the data
+ik <- 0
+
+for (i in 1:cond) {
+  # Pre-calculate condition-specific data if possible
+  for (k in 1:K) {
+    ik <- ik + 1
+    times_path  <- paste0("Times/TimeRow", i, "Rep", k, ".Rdata")
+    
+    # Load data once per iteration
+    times <- load_safe(times_path)
+    
+    # Evaluate results
+    if(!is.null(times$result)) { # Check that there are actual results in the model (avoid non-converged data)
+      # Assignment using dynamic column names
+      exp_design[ik, "Times"] <- times$result[1]
+    } else {
+      exp_design[ik, "Times"]  <- NA
+    }
+  }
+}
+
+################################################################################
+# FINAL ANALYSIS
+################################################################################
+# Preliminary (How many have run until now?)
+exp_design %>% group_by(nclus)   %>% summarise(across(Times, \(x) sum(!is.na(x))))
+exp_design %>% group_by(coeff)   %>% summarise(across(Times, \(x) sum(!is.na(x))))
+exp_design %>% group_by(N_g)     %>% summarise(across(Times, \(x) sum(!is.na(x))))
+exp_design %>% group_by(S_size)  %>% summarise(across(Times, \(x) sum(!is.na(x))))
+exp_design %>% group_by(A)       %>% summarise(across(Times, \(x) sum(!is.na(x))))
+exp_design %>% group_by(ntimes)  %>% summarise(across(Times, \(x) sum(!is.na(x))))
+exp_design %>% group_by(ngroups) %>% summarise(across(Times, \(x) sum(!is.na(x))))
+
+# Performance per simulation factor -----------------------------------------------------------------------------------------------------
+exp_design %>% group_by(nclus)   %>% summarise(across(Times, \(x) qwraps2::mean_sd(x, denote_sd = "paren", digits = 3, na_rm = TRUE))) 
+exp_design %>% group_by(coeff)   %>% summarise(across(Times, \(x) qwraps2::mean_sd(x, denote_sd = "paren", digits = 3, na_rm = TRUE))) 
+exp_design %>% group_by(N_g)     %>% summarise(across(Times, \(x) qwraps2::mean_sd(x, denote_sd = "paren", digits = 3, na_rm = TRUE))) 
+exp_design %>% group_by(S_size)  %>% summarise(across(Times, \(x) qwraps2::mean_sd(x, denote_sd = "paren", digits = 3, na_rm = TRUE))) 
+exp_design %>% group_by(A)       %>% summarise(across(Times, \(x) qwraps2::mean_sd(x, denote_sd = "paren", digits = 3, na_rm = TRUE))) 
+exp_design %>% group_by(ntimes)  %>% summarise(across(Times, \(x) qwraps2::mean_sd(x, denote_sd = "paren", digits = 3, na_rm = TRUE))) 
+exp_design %>% group_by(ngroups) %>% summarise(across(Times, \(x) qwraps2::mean_sd(x, denote_sd = "paren", digits = 3, na_rm = TRUE)))
+
+# General performance
+exp_design %>% summarise(across(Times, \(x) qwraps2::mean_sd(x, denote_sd = "paren", digits = 3, na_rm = TRUE))) 
+exp_design[which(exp_design$Times == min(exp_design$Times, na.rm = TRUE)), ]
+exp_design[which(exp_design$Times == max(exp_design$Times, na.rm = TRUE)), ]
