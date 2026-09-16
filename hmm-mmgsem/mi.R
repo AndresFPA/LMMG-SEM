@@ -87,8 +87,8 @@ compute_mi_long <- function(data,
   
   # We will use the 'lavaan' and 'semTools' packages to automatize the MI testing process.
   # Do some variable preparations
-  unique_times  <- unique(data[time_var])
-  unique_groups <- unique(data[group_var])
+  unique_times  <- unique(data[[time_var]])
+  unique_groups <- unique(data[[group_var]])
 
   n_times  <- length(unique_times) 
   n_groups <- length(unique_groups) 
@@ -110,7 +110,7 @@ compute_mi_long <- function(data,
     par_table <- parTable(fit)
     flagged <- character(0)
     for (plabel in sig_tests$lhs) {
-      row_match <- parTable[parTable$plabel == plabel | parTable$label == plabel, ]
+      row_match <- par_table[par_table$plabel == plabel | par_table$label == plabel, ]
       if (nrow(row_match) > 0 && any(row_match$op == "=~")) {
         load_row <- row_match[row_match$op == "=~", ][1, ]
         flagged <- c(flagged, paste(load_row$lhs, load_row$op, load_row$rhs))
@@ -124,34 +124,30 @@ compute_mi_long <- function(data,
   # ----------------------------------------------------------------------------
   # Set up a progress bar for Step 1
   message("Executing Step 1: Cross-Sectional Invariance per Time Point...")
-  pb_1 <- progress_bar$new(
-    format = "  Step 1 [:bar] :percent in :elapsed | Wave :current/:total",
-    total = n_times, clear = FALSE, width = 70
-  )
+  pb_1 <- txtProgressBar(min = 0, max = n_times, style = 3)
 
   cross_sectional_results <- vector(length = n_times, mode = "list")
-  names(cross_sectional_results) <- paste0(Time:, unique_times)
+  names(cross_sectional_results) <- paste0("Time_", unique_times)
 
   for(t in 1:n_times){
-    # For progress bar
-    pb_1$tick()
-
     # Subset the data with all groups and a single time point
-    sub_data <- data[data[time_var] == t, ]
+    sub_data <- data[data[[time_var]] == unique_times[t], ]
 
     # Generate model syntax using semTools
     config_syntax <- semTools::measEq.syntax(configural.model = model, 
                                              data             = sub_data, 
-                                             group            = group_var)
+                                             group            = group_var, 
+                                             std.lv           = TRUE)
 
     metric_syntax <- semTools::measEq.syntax(configural.model = model, 
                                              data             = sub_data, 
                                              group            = group_var,
-                                             group.equal      = "loadings")
+                                             group.equal      = "loadings", 
+                                             std.lv           = TRUE)
 
     # Fit the models
-    config_fit <- lavaan::cfa(model = config_syntax)
-    metric_fit <- lavaan::cfa(model = metric_syntax)
+    config_fit <- lavaan::cfa(model = as.character(config_syntax), data = sub_data, group = group_var, ...)
+    metric_fit <- lavaan::cfa(model = as.character(metric_syntax), data = sub_data, group = group_var, ...)
 
     config_fit_idxs <- lavaan::fitmeasures(config_fit)[fit_indices]
     metric_fit_idxs <- lavaan::fitmeasures(metric_fit)[fit_indices] 
@@ -160,45 +156,44 @@ compute_mi_long <- function(data,
        flagged_params <- c(flagged_params, extract_flagged(metric_fit))
     }
 
-    longitudinal_results[[g]] <- list(
-        configural_fit <- config_fit,
-        metric_fit     <- metric_fit
+    cross_sectional_results[[t]] <- list(
+        configural_fit = config_fit,
+        metric_fit     = metric_fit
     )
+
+    setTxtProgressBar(pb_1, t)
   }
+  close(pb_1)
 
   # ----------------------------------------------------------------------------
   # Step 2: Measurement Invariance Across Time Points for Each Group
   # ----------------------------------------------------------------------------
   # Set up a progress bar for Step 2
   message("Executing Step 2: Longitudinal Invariance per Group...")
-  pb_2 <- progress_bar$new(
-    format = "  Step 2 [:bar] :percent in :elapsed | Wave :current/:total",
-    total = n_groups, clear = FALSE, width = 70
-  )
+  pb_2 <- txtProgressBar(min = 0, max = n_groups, style = 3)
 
   longitudinal_results <- vector(length = n_groups, mode = "list")
-  names(longitudinal_results) <- paste0(Group:, unique_group)
+  names(longitudinal_results) <- paste0("Group_", unique_groups)
 
   for(g in 1:n_groups){
-    # For progress bar
-    pb_2$tick()
-
-    # Subset the data with all groups and a single time point
-    sub_data <- data[data[group_var] == g, ]
+    # Subset the data with all time points for a single group
+    sub_data <- data[data[[group_var]] == unique_groups[g], ]
 
     # Generate model syntax using semTools
     config_syntax <- semTools::measEq.syntax(configural.model = model, 
                                              data             = sub_data, 
-                                             group            = group_var)
+                                             group            = time_var, 
+                                             std.lv           = TRUE)
 
     metric_syntax <- semTools::measEq.syntax(configural.model = model, 
                                              data             = sub_data, 
-                                             group            = group_var,
-                                             group.equal      = "loadings")
+                                             group            = time_var,
+                                             group.equal      = "loadings", 
+                                             std.lv           = TRUE)
 
     # Fit the models
-    config_fit <- lavaan::cfa(model = config_syntax)
-    metric_fit <- lavaan::cfa(model = metric_syntax)
+    config_fit <- lavaan::cfa(model = as.character(config_syntax), data = sub_data, group = time_var, ...)
+    metric_fit <- lavaan::cfa(model = as.character(metric_syntax), data = sub_data, group = time_var, ...)
 
     config_fit_idxs <- lavaan::fitmeasures(config_fit)[fit_indices]
     metric_fit_idxs <- lavaan::fitmeasures(metric_fit)[fit_indices] 
@@ -208,31 +203,24 @@ compute_mi_long <- function(data,
     }
 
     longitudinal_results[[g]] <- list(
-        configural_fit <- config_fit,
-        metric_fit     <- metric_fit
+        configural_fit = config_fit,
+        metric_fit     = metric_fit
     )
+
+    setTxtProgressBar(pb_2, g)
   }
+  close(pb_2)
 
   # -------------------------------------------------------------
   # Step 3: Build final syntax
   # -------------------------------------------------------------
   # message("\nBuilding Final Model Syntax with Flagged Parameters for Partial Invariance...")
   
-  # pb_3 <- progress_bar$new(
-  #   format = "  Building Model Syntax [:bar] :percent | Elapsed: :elapsed",
-  #   total = 1, clear = FALSE, width = 70
-  # )
-
   # -------------------------------------------------------------
   # Final Step: Simultaneous Omnibus MG-CFA Across G x T Cells
   # -------------------------------------------------------------
   message("\nEstimating Final (Partial) Invariance Model across G x T cells...")
   data$group_time <- interaction(data[[group_var]], data[[time_var]], sep = ".Time", drop = TRUE)
-  
-  pb_4 <- progress_bar$new(
-    format = "  Final Estimation [:bar] :percent | Elapsed: :elapsed",
-    total = 1, clear = FALSE, width = 70
-  )
 
   final_syntax <- semTools::measEq.syntax(configural.model = model, 
                                           data             = data, 
@@ -240,11 +228,7 @@ compute_mi_long <- function(data,
                                           group.equal      = c("loadings"),
                                           group.partial    = if (length(flagged_params) > 0) flagged_params else NULL) # Add flagged parameters (if there are any)
 
-  pb_4$tick()
-
-  final_fit <- lavaan::cfa(model = final_syntax, data = data, group = "group_time", ...)
-
-  pb_4$tick()
+  final_fit <- lavaan::cfa(model = as.character(final_syntax), data = data, group = "group_time", ...)
 
 
   # Extract (in advance) the factor covariance matrices for Step 2 of LMMG-SEM
