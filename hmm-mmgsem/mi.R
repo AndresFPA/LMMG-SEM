@@ -81,7 +81,7 @@ compute_mi_long <- function(data,
                             alpha = 0.05,
                             invariance_levels = c("configural", "metric"),
                             fit_indices = c("chisq", "df", "pvalue", "cfi", "rmsea", "srmr"),
-                            d_cfi_threshold = 0.010,
+                            d_cfi_threshold = 0.020,
                             d_rmsea_threshold = 0.015,
                             ...) {
   
@@ -214,19 +214,68 @@ compute_mi_long <- function(data,
   }
 
   # -------------------------------------------------------------
+  # Step 3: Build final syntax
+  # -------------------------------------------------------------
+  # message("\nBuilding Final Model Syntax with Flagged Parameters for Partial Invariance...")
+  
+  # pb_3 <- progress_bar$new(
+  #   format = "  Building Model Syntax [:bar] :percent | Elapsed: :elapsed",
+  #   total = 1, clear = FALSE, width = 70
+  # )
+
+  # -------------------------------------------------------------
   # Final Step: Simultaneous Omnibus MG-CFA Across G x T Cells
   # -------------------------------------------------------------
   message("\nEstimating Final (Partial) Invariance Model across G x T cells...")
   data$group_time <- interaction(data[[group_var]], data[[time_var]], sep = ".Time", drop = TRUE)
   
-  pb_c <- progress_bar$new(
+  pb_4 <- progress_bar$new(
     format = "  Final Estimation [:bar] :percent | Elapsed: :elapsed",
     total = 1, clear = FALSE, width = 70
   )
 
+  final_syntax <- semTools::measEq.syntax(configural.model = model, 
+                                          data             = data, 
+                                          group            = "group_time",
+                                          group.equal      = c("loadings"),
+                                          group.partial    = if (length(flagged_params) > 0) flagged_params else NULL) # Add flagged parameters (if there are any)
+
+  pb_4$tick()
+
+  final_fit <- lavaan::cfa(model = final_syntax, data = data, group = "group_time", ...)
+
+  pb_4$tick()
+
+
+  # Extract (in advance) the factor covariance matrices for Step 2 of LMMG-SEM
+  phi_matrices <- lavaan::lavInspect(object = final_fit, what = "cov.lv")
+
   # ----------------------------------------------------------------------------
   # Model Comparisons & Invariance Decision Summary
   # ----------------------------------------------------------------------------
-  
-  return(invisible(NULL))
+  # Extract relevant fit indices for all models
+  # Empty matrix to store the fit indices
+  step1_fits <- as.data.frame(matrix(data = NA, nrow = 2, ncol = length(fit_indices), dimnames = list(c("configural", "metric"), fit_indices)))
+  step2_fits <- as.data.frame(matrix(data = NA, nrow = 2, ncol = length(fit_indices), dimnames = list(c("configural", "metric"), fit_indices)))
+
+  fit_measures_list <- list(
+    step1_across_groups = lapply(cross_sectional_results, function(x) {
+      fit_table <- rbind(lavaan::fitmeasures(x$configural_fit)[fit_indices], lavaan::fitmeasures(x$metric_fit)[fit_indices])
+    }),
+    step2_across_time = lapply(longitudinal_results, function(x) {
+      fit_table <- rbind(lavaan::fitmeasures(x$configural_fit)[fit_indices], lavaan::fitmeasures(x$metric_fit)[fit_indices])
+    }),
+    final_model = lavaan::fitmeasures(final_fit)[fit_indices]
+  )
+
+  return(
+    list(
+      step1_across_groups = cross_sectional_results,
+      step2_across_time   = longitudinal_results,
+      final_fit           = final_fit,
+      phi_matrices        = phi_matrices,
+      flagged_params      = unique(flagged_params),
+      fit_measures        = fit_measures_list
+    )
+  )
 }
