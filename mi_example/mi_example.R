@@ -53,9 +53,6 @@ sim_data     <- sim_res$data
 true_clus    <- sim_res$clusters
 true_lambdas <- sim_res$lambdas
 
-cat("Data dimensions:", nrow(sim_data), "rows x", ncol(sim_data), "columns\n")
-print(head(sim_data[, 1:8]))
-
 # ------------------------------------------------------------------------------
 # 3. Define Measurement and Structural Model Syntax
 # ------------------------------------------------------------------------------
