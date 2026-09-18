@@ -9,6 +9,7 @@
 library(lavaan)
 library(MASS)
 library(semTools)
+library(sirt)
 
 # Source data generation function
 source("Simulation/DatGen.R")
@@ -30,7 +31,7 @@ set.seed(12345)
 # 2. Simulate Data Using dat_gen()
 # ------------------------------------------------------------------------------
 # Simulation conditions
-n_groups   <- 10     # Number of groups (G)
+n_groups   <- 6     # Number of groups (G)
 n_times    <- 2      # Number of time points (T)
 n_states   <- 2      # Number of latent states/clusters (S)
 n_per_grp  <- 150    # Sample size per group (N_g)
@@ -79,11 +80,11 @@ mi_results <- compute_mi_long(
   model             = S1,
   group_var         = "Group",
   time_var          = "Timepoint",
-  alpha             = 0.05,
-  invariance_levels = c("configural", "metric"),
+  alpha             = 0.01,
   fit_indices       = c("chisq", "df", "pvalue", "cfi", "rmsea", "srmr"),
   d_cfi_threshold   = 0.010,
-  d_rmsea_threshold = 0.015
+  method            = "score",
+  specific_noninv   = TRUE
 )
 
 # ------------------------------------------------------------------------------
