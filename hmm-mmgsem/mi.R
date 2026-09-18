@@ -238,53 +238,108 @@ compute_mi_long <- function(data,
   }
   
   # ============================================================================
-  # METHOD: ALIGNMENT OPTIMIZATION (Alternative)
+  # METHOD: ALIGNMENT OPTIMIZATION (Two-Step Decomposed)
   # ============================================================================
   if (method == "alignment") {
-    browser()
-    if (!requireNamespace("sirt", quietly = TRUE)) {
-      stop("Package 'sirt' must be installed to use method = 'alignment'.")
-    }
-    message("Running Alignment Optimization across all G x T cells...")
-    
-    fit_config_all <- lavaan::cfa(model, data = data, group = "group_time", std.lv = TRUE, ...)
-    pars <- lavInspect(fit_config_all, "est")
-    parsed_m <- lavaanify(model)
-    load_pairs <- parsed_m[parsed_m$op == "=~", c("lhs", "rhs")]
-    items <- unique(load_pairs$rhs)
-    
-    lambda_mat <- matrix(NA, nrow = n_cells, ncol = length(items), dimnames = list(all_cells, items))
-    nu_mat     <- matrix(0,  nrow = n_cells, ncol = length(items), dimnames = list(all_cells, items))
-    
-    for (cl in all_cells) { # Go over every group-time combination
-      cl_lambda <- pars[[cl]]$lambda
-      for (itm in items) {
-        fac <- load_pairs$lhs[load_pairs$rhs == itm]
-        lambda_mat[cl, itm] <- cl_lambda[itm, fac]
-      }
-    }
-    
-    align_res <- sirt::invariance.alignment(lambda = lambda_mat, nu = nu_mat)
-    noninv_loadings <- align_res$par_invariance$loadings
-    
-    for (itm in items) {
-      fac <- load_pairs$lhs[load_pairs$rhs == itm]
-      bad_cells <- rownames(noninv_loadings)[noninv_loadings[, itm] == 1]
-      if (length(bad_cells) > 0) {
-        flagged_global <- c(flagged_global, paste(fac, "=~", itm))
-        for (bc in bad_cells) {
-          flagged_pairs <- rbind(flagged_pairs, data.frame(
-            lhs = fac, rhs = itm, cell1 = bc, cell2 = bc, stringsAsFactors = FALSE
-          ))
+    # Helper: Run alignment on a subset and detect deviating cells
+    detect_alignment_deviations <- function(sub_df, split_var, fixed_val, mode = c("wave", "group"), tol = 0.15) {
+      # Fit unconstrained configural model on this slice
+      fit_cfg <- tryCatch({
+        lavaan::cfa(model, data = sub_df, group = split_var, std.lv = TRUE, ...)
+      }, error = function(e) NULL)
+      
+      if (is.null(fit_cfg) || !lavInspect(fit_cfg, "converged")) return(list(global = character(0), pairs = NULL))
+
+      # Extract lambda estimates per group
+      pars_est <- lavInspect(fit_cfg, "est")
+      pt <- lavaanify(model)
+      load_pairs <- pt[pt$op == "=~", c("lhs", "rhs")]
+      items <- unique(load_pairs$rhs)
+      grp_names <- names(pars_est)
+      n_grps <- length(grp_names)
+
+      lambda_mat <- matrix(NA, nrow = n_grps, ncol = length(items), dimnames = list(grp_names, items)) # G x I required for sirt::invariance.alignment()
+      nu_mat     <- matrix(0,  nrow = n_grps, ncol = length(items), dimnames = list(grp_names, items))
+
+      for (grp in grp_names) {
+        l_mat <- pars_est[[grp]]$lambda
+        for (itm in items) {
+          f_name <- load_pairs$lhs[load_pairs$rhs == itm]
+          lambda_mat[grp, itm] <- l_mat[itm, f_name]
         }
       }
+
+      # Run alignment optimization
+      align_fit <- tryCatch({
+        sirt::invariance.alignment(lambda = lambda_mat, nu = nu_mat, align.scale = c(0.2, 0.4))
+      }, error = function(e) NULL)
+
+      if (is.null(align_fit)) return(list(global = character(0), pairs = NULL))
+
+      # Calculate absolute deviation from the column median of aligned loadings
+      aligned_lambdas <- align_fit$lambda.aligned
+      median_lambdas  <- apply(aligned_lambdas, 2, median, na.rm = TRUE)
+      
+      glob_flagged <- character(0)
+      pair_flagged <- list()
+
+      for (itm in items) {
+        fac <- load_pairs$lhs[load_pairs$rhs == itm]
+        # Identify groups whose aligned loading deviates more than 'tol' from the median consensus
+        deviations <- abs(aligned_lambdas[, itm] - median_lambdas[itm])
+        bad_groups <- names(deviations)[deviations > tol]
+
+        if (length(bad_groups) > 0) {
+          glob_flagged <- c(glob_flagged, paste(fac, "=~", itm))
+          for (bg in bad_groups) {
+            cell_name <- if (mode == "wave") paste0(bg, ".Time", fixed_val) else paste0(fixed_val, ".Time", bg)
+            pair_flagged[[length(pair_flagged) + 1]] <- data.frame(
+              lhs = fac, rhs = itm, cell1 = cell_name, cell2 = cell_name, stringsAsFactors = FALSE
+            )
+          }
+        }
+      }
+
+      p_df <- if (length(pair_flagged) > 0) do.call(rbind, pair_flagged) else NULL
+      return(list(global = unique(glob_flagged), pairs = p_df))
     }
-    cross_sectional_results <- list()
-    longitudinal_results    <- list()
+
+    # --- Step 1: Alignment across groups within each wave ---
+    message("Executing Step 1: Cross-Sectional Alignment per Time Point...")
+    pb_1 <- txtProgressBar(min = 0, max = n_times, style = 3)
+    cross_sectional_results <- vector(length = n_times, mode = "list")
+    names(cross_sectional_results) <- paste0("Time_", unique_times)
+
+    for (t in seq_len(n_times)) {
+      sub_data <- data[data[[time_var]] == unique_times[t], ]
+      align_step1 <- detect_alignment_deviations(sub_data, split_var = group_var, fixed_val = unique_times[t], mode = "wave")
+      
+      flagged_global <- c(flagged_global, align_step1$global)
+      if (!is.null(align_step1$pairs)) flagged_pairs <- rbind(flagged_pairs, align_step1$pairs)
+      
+      cross_sectional_results[[t]] <- align_step1
+      setTxtProgressBar(pb_1, t)
+    }
+    close(pb_1)
+
+    # --- Step 2: Alignment across time points within each group ---
+    message("Executing Step 2: Longitudinal Alignment per Group...")
+    pb_2 <- txtProgressBar(min = 0, max = n_groups, style = 3)
+    longitudinal_results <- vector(length = n_groups, mode = "list")
+    names(longitudinal_results) <- paste0("Group_", unique_groups)
+
+    for (g in seq_len(n_groups)) {
+      sub_data <- data[data[[group_var]] == unique_groups[g], ]
+      align_step2 <- detect_alignment_deviations(sub_data, split_var = time_var, fixed_val = unique_groups[g], mode = "group")
+      
+      flagged_global <- c(flagged_global, align_step2$global)
+      if (!is.null(align_step2$pairs)) flagged_pairs <- rbind(flagged_pairs, align_step2$pairs)
+      
+      longitudinal_results[[g]] <- align_step2
+      setTxtProgressBar(pb_2, g)
+    }
+    close(pb_2)
   }
-  
-  flagged_global <- unique(flagged_global)
-  if (nrow(flagged_pairs) > 0) flagged_pairs <- unique(flagged_pairs)
   
   # ============================================================================
   # Step 3: Build Final Partial Invariance Syntax
@@ -356,16 +411,24 @@ compute_mi_long <- function(data,
   # ----------------------------------------------------------------------------
   # Fit Measures Summary
   # ----------------------------------------------------------------------------
+  if (method == "score") {
+      step1_across_groups = lapply(cross_sectional_results, function(x) {
+        rbind(configural = lavaan::fitmeasures(x$configural_fit)[fit_indices],
+              metric     = lavaan::fitmeasures(x$metric_fit)[fit_indices])
+        })
+      step2_across_time = lapply(longitudinal_results, function(x) {
+        rbind(configural = lavaan::fitmeasures(x$configural_fit)[fit_indices],
+              metric     = lavaan::fitmeasures(x$metric_fit)[fit_indices])
+        })
+  } else {
+    step1_across_groups = NULL
+    step2_across_time   = NULL
+  }
+
   fit_measures_list <- list(
-    step1_across_groups = lapply(cross_sectional_results, function(x) {
-      rbind(configural = lavaan::fitmeasures(x$configural_fit)[fit_indices],
-            metric     = lavaan::fitmeasures(x$metric_fit)[fit_indices])
-    }),
-    step2_across_time = lapply(longitudinal_results, function(x) {
-      rbind(configural = lavaan::fitmeasures(x$configural_fit)[fit_indices],
-            metric     = lavaan::fitmeasures(x$metric_fit)[fit_indices])
-    }),
-    final_model = lavaan::fitmeasures(final_fit)[fit_indices]
+    step1_across_groups = step1_across_groups,
+    step2_across_time   = step2_across_time,
+    final_model         = lavaan::fitmeasures(final_fit)[fit_indices]
   )
   
   return(list(
