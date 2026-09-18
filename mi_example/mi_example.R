@@ -83,7 +83,7 @@ mi_results <- compute_mi_long(
   alpha             = 0.01,
   fit_indices       = c("chisq", "df", "pvalue", "cfi", "rmsea", "srmr"),
   d_cfi_threshold   = 0.010,
-  method            = "score",
+  method            = "alignment",
   specific_noninv   = TRUE
 )
 
@@ -91,8 +91,9 @@ mi_results <- compute_mi_long(
 # 5. Review Measurement Invariance Results
 # ------------------------------------------------------------------------------
 print(mi_results$fit_measures)
-print(mi_results$flagged_params)
+print(mi_results$flagged_pairs)
 print(round(mi_results$fit_measures$final_model, 4))
+summary(mi_results$final_fit)
 
 # ------------------------------------------------------------------------------
 # 6. Step 2: Longitudinal Mixture Multi-Group SEM (hmm_mmgsem)

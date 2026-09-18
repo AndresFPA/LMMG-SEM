@@ -241,6 +241,7 @@ compute_mi_long <- function(data,
   # METHOD: ALIGNMENT OPTIMIZATION (Alternative)
   # ============================================================================
   if (method == "alignment") {
+    browser()
     if (!requireNamespace("sirt", quietly = TRUE)) {
       stop("Package 'sirt' must be installed to use method = 'alignment'.")
     }
@@ -255,7 +256,7 @@ compute_mi_long <- function(data,
     lambda_mat <- matrix(NA, nrow = n_cells, ncol = length(items), dimnames = list(all_cells, items))
     nu_mat     <- matrix(0,  nrow = n_cells, ncol = length(items), dimnames = list(all_cells, items))
     
-    for (cl in all_cells) {
+    for (cl in all_cells) { # Go over every group-time combination
       cl_lambda <- pars[[cl]]$lambda
       for (itm in items) {
         fac <- load_pairs$lhs[load_pairs$rhs == itm]
@@ -303,7 +304,6 @@ compute_mi_long <- function(data,
     final_fit <- lavaan::cfa(model = as.character(final_syntax), data = data, group = "group_time", ...)
     
   } else {
-    browser()
     # Strategy 2: Specific Non-Invariance Syntax with c() Labels
     parsed_model <- lavaanify(model)
     load_rows    <- parsed_model[parsed_model$op == "=~", ]
