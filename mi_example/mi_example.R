@@ -25,7 +25,7 @@ source("hmm-mmgsem/hmm_mmgsem.R")
 source("hmm-mmgsem/mi.R")
 
 # Set seed for reproducibility
-set.seed(12345)
+set.seed(1)
 
 # ------------------------------------------------------------------------------
 # 2. Simulate Data Using dat_gen()
@@ -75,23 +75,34 @@ S2 <- '
 # ------------------------------------------------------------------------------
 # 4. Step 1: Sequential Measurement Invariance Analysis (compute_mi_long)
 # ------------------------------------------------------------------------------
-mi_results <- compute_mi_long(
+mi_results <- compute_mi_long_stepwise_score(
   data              = sim_data,
   model             = S1,
   group_var         = "Group",
   time_var          = "Timepoint",
   alpha             = 0.01,
   fit_indices       = c("chisq", "df", "pvalue", "cfi", "rmsea", "srmr"),
-  d_cfi_threshold   = 0.010,
-  method            = "alignment",
-  specific_noninv   = TRUE
+  d_cfi_threshold   = 0.020, 
+  max_iter          = 1000
 )
+
+# mi_results <- compute_mi_long(
+#   data              = sim_data,
+#   model             = S1,
+#   group_var         = "Group",
+#   time_var          = "Timepoint",
+#   alpha             = 0.01,
+#   fit_indices       = c("chisq", "df", "pvalue", "cfi", "rmsea", "srmr"),
+#   d_cfi_threshold   = 0.010,
+#   method            = "alignment",
+#   specific_noninv   = TRUE
+# )
 
 # ------------------------------------------------------------------------------
 # 5. Review Measurement Invariance Results
 # ------------------------------------------------------------------------------
 print(mi_results$fit_measures)
-print(mi_results$flagged_pairs)
+print(sort(mi_results$final_partial_constraints))
 print(round(mi_results$fit_measures$final_model, 4))
 summary(mi_results$final_fit)
 
