@@ -21,11 +21,14 @@ compute_mi_long_stepwise_score <- function(data,
                                            model,
                                            group_var,
                                            time_var,
+                                           method = c("group_violations", "test_statistic"),
                                            alpha = 0.05,
                                            d_cfi_threshold = 0.010,
                                            max_iter = 20,
                                            fit_indices = c("chisq", "df", "pvalue", "cfi", "rmsea", "srmr"),
                                            ...) {
+  
+  method <- match.arg(method)
 
   # Ensure the grouping/time variables are character-valued for stable ordering
   data <- data[!is.na(data[[group_var]]) & !is.na(data[[time_var]]), , drop = FALSE]
@@ -67,7 +70,7 @@ compute_mi_long_stepwise_score <- function(data,
 
   # Extract the most violated invariance constraint based on how often it is
   # implicated across the group-vs-reference comparisons evaluated by lavTestScore.
-  candidate_from_score <- function(fit, alpha = 0.05) {
+  candidate_from_score <- function(fit, alpha = 0.05, selection_method = "group_violations") {
     if (is.null(fit) || !lavaan::lavInspect(fit, "converged")) {
       return(NULL)
     }
@@ -102,23 +105,29 @@ compute_mi_long_stepwise_score <- function(data,
       return(NULL)
     }
 
-    # Primary ordering criterion: how many times the same loading constraint is
-    # flagged across the group comparisons. Tie-break using the largest score
-    # statistic, then smallest p-value.
-    agg <- aggregate(
-      violated ~ constraint_key,
-      data = uni_tab,
-      FUN = sum,
-      na.action = na.omit
-    )
-    names(agg)[2] <- "n_violations"
-
-    agg <- agg[order(-agg$n_violations), , drop = FALSE]
-    chosen_key <- agg$constraint_key[1]
-
-    candidate_rows <- uni_tab[uni_tab$constraint_key == chosen_key, , drop = FALSE]
-
-    return(candidate_rows[1, , drop = FALSE])
+    if (selection_method == "test_statistic") {
+      # Filter to Bonferroni violations, sort descending by univariate X2 score
+      viol_tab <- uni_tab[uni_tab$violated, , drop = FALSE]
+      viol_tab <- viol_tab[order(-viol_tab$X2, viol_tab$p.value), , drop = FALSE]
+      return(viol_tab[1, , drop = FALSE])
+    } else {
+      # group_violations: Pick item with the most pairwise violations across slices
+      agg <- aggregate(
+        violated ~ constraint_key,
+        data = uni_tab,
+        FUN = sum,
+        na.action = na.omit
+      )
+      names(agg)[2] <- "n_violations"
+      
+      agg <- agg[order(-agg$n_violations), , drop = FALSE]
+      chosen_key <- agg$constraint_key[1]
+      
+      candidate_rows <- uni_tab[uni_tab$constraint_key == chosen_key, , drop = FALSE]
+      candidate_rows <- candidate_rows[order(-candidate_rows$X2, candidate_rows$p.value), , drop = FALSE]
+      
+      return(candidate_rows[1, , drop = FALSE])
+    }
   }
 
   parameter_name_from_constraint <- function(fit, lhs_label, rhs_label) {
@@ -167,9 +176,10 @@ compute_mi_long_stepwise_score <- function(data,
   }
 
   stepwise_slice <- function(sub_data,
-                            split_var,
-                            label,
-                            ...) {
+                             split_var,
+                             label,
+                             selection_method,
+                             ...) {
     config_syn <- semTools::measEq.syntax(
       configural.model = model,
       data = sub_data,
@@ -203,7 +213,7 @@ compute_mi_long_stepwise_score <- function(data,
         break
       }
 
-      candidate <- candidate_from_score(current_fit, alpha = alpha)
+      candidate <- candidate_from_score(current_fit, alpha = alpha, selection_method = method)
       if (is.null(candidate)) {
         break
       }
@@ -219,7 +229,7 @@ compute_mi_long_stepwise_score <- function(data,
       history[[length(history) + 1]] <- list(
         iter = iter,
         parameter = param_name,
-        stat = candidate$stat,
+        stat = candidate$X2,
         p_value = candidate$p.value
       )
 
@@ -243,6 +253,56 @@ compute_mi_long_stepwise_score <- function(data,
       acceptable = if (is.na(final_delta_cfi)) FALSE else final_delta_cfi <= d_cfi_threshold
     ))
   }
+  
+  # Helper to rewrite syntax with an invariant marker variable per factor
+  adjust_marker_variables <- function(base_model, non_invariant_loadings) {
+    pt <- lavaan::lavParseModelString(base_model, as.data.frame = TRUE)
+    load_pt <- pt[pt$op == "=~", , drop = FALSE]
+    factors <- unique(load_pt$lhs)
+    
+    clean_key <- function(lhs, rhs) gsub("\\s+", "", paste(lhs, "=~", rhs))
+    freed_keys <- gsub("\\s+", "", non_invariant_loadings)
+    
+    new_syntax_lines <- character(0)
+    
+    for (fac in factors) {
+      fac_items <- load_pt$rhs[load_pt$lhs == fac]
+      fac_keys  <- clean_key(fac, fac_items)
+      
+      # Determine which items for this factor remained invariant
+      is_invariant <- !(fac_keys %in% freed_keys)
+      
+      if (any(is_invariant)) {
+        # Select the first invariant item as the new marker
+        marker_idx <- which(is_invariant)[1]
+      } else {
+        # Fallback: if no invariant item exists on this factor, keep the first item
+        marker_idx <- 1
+      }
+      
+      marker_item <- fac_items[marker_idx]
+      other_items <- fac_items[-marker_idx]
+      
+      # Reconstruct factor definition: marker fixed to 1, others estimated freely (NA*)
+      if (length(other_items) > 0) {
+        line <- sprintf("%s =~ 1*%s + %s", fac, marker_item, paste0(other_items, collapse = " + "))
+      } else {
+        line <- sprintf("%s =~ 1*%s", fac, marker_item)
+      }
+      new_syntax_lines <- c(new_syntax_lines, line)
+    }
+    
+    # Retain any regressions, covariances, or intercepts from the original syntax
+    # other_pt <- pt[pt$op != "=~", , drop = FALSE]
+    # if (nrow(other_pt) > 0) {
+    #   other_lines <- vapply(seq_len(nrow(other_pt)), function(i) {
+    #     paste(other_pt$lhs[i], other_pt$op[i], other_pt$rhs[i])
+    #   }, character(1))
+    #   new_syntax_lines <- c(new_syntax_lines, other_lines)
+    # }
+    
+    paste(new_syntax_lines, collapse = "\n")
+  }
 
   # ---------------------------------------------------------------------------
   # Step 1: Across groups within each time point
@@ -254,7 +314,7 @@ compute_mi_long_stepwise_score <- function(data,
   pb_1 <- txtProgressBar(min = 0, max = length(unique_times), style = 3)
   for (t in seq_along(unique_times)) {
     sub_data <- data[data[[time_var]] == unique_times[t], , drop = FALSE]
-    result <- stepwise_slice(sub_data, split_var = group_var, label = unique_times[t], ...)
+    result <- stepwise_slice(sub_data, split_var = group_var, label = unique_times[t], selection_method = method, ...)
     cross_sectional_results[[t]] <- result
     setTxtProgressBar(pb_1, t)
   }
@@ -270,7 +330,7 @@ compute_mi_long_stepwise_score <- function(data,
   pb_2 <- txtProgressBar(min = 0, max = length(unique_groups), style = 3)
   for (g in seq_along(unique_groups)) {
     sub_data <- data[data[[group_var]] == unique_groups[g], , drop = FALSE]
-    result <- stepwise_slice(sub_data, split_var = time_var, label = unique_groups[g], ...)
+    result <- stepwise_slice(sub_data, split_var = time_var, label = unique_groups[g], selection_method = method,...)
     longitudinal_results[[g]] <- result
     setTxtProgressBar(pb_2, g)
   }
@@ -309,14 +369,18 @@ compute_mi_long_stepwise_score <- function(data,
 #     group = "group_time",
 #     ...
 #   )
-
+  
+  # Reconstruct model syntax to enforce invariant marker variables
+  final_omnibus_model_syntax <- adjust_marker_variables(model, final_partials)
+  
   final_fit <- lavaan::cfa(
-    model = model,
-    data = data,
-    group = "group_time",
-    group.equal = "loadings",
+    model         = final_omnibus_model_syntax,
+    data          = data,
+    group         = "group_time",
+    group.equal   = "loadings",
     group.partial = if (length(final_partials) > 0) final_partials else NULL,
-    std.lv = FALSE
+    std.lv        = FALSE,
+    ...
   )
 
   phi_matrices <- lavaan::lavInspect(final_fit, "cov.lv")
@@ -336,14 +400,14 @@ compute_mi_long_stepwise_score <- function(data,
     }),
     final_model = lavaan::fitMeasures(final_fit, fit_indices)
   )
-
+  
   return(list(
     step1_across_groups = cross_sectional_results,
     step2_across_time = longitudinal_results,
     final_fit = final_fit,
+    final_syntax = final_omnibus_model_syntax,
     phi_matrices = phi_matrices,
     final_partial_constraints = final_partials,
-    fit_measures = fit_measures_list #,
-    # final_syntax = as.character(final_syntax)
+    fit_measures = fit_measures_list
   ))
 }

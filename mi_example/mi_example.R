@@ -23,6 +23,7 @@ source("hmm-mmgsem/hmm_mmgsem.R")
 
 # Source two-step longitudinal measurement invariance testing function
 source("hmm-mmgsem/mi.R")
+source("hmm-mmgsem/mi_stepwise_score.R")
 
 # Set seed for reproducibility
 set.seed(1)
@@ -31,7 +32,7 @@ set.seed(1)
 # 2. Simulate Data Using dat_gen()
 # ------------------------------------------------------------------------------
 # Simulation conditions
-n_groups   <- 6     # Number of groups (G)
+n_groups   <- 12     # Number of groups (G)
 n_times    <- 2      # Number of time points (T)
 n_states   <- 2      # Number of latent states/clusters (S)
 n_per_grp  <- 150    # Sample size per group (N_g)
@@ -83,7 +84,8 @@ mi_results <- compute_mi_long_stepwise_score(
   alpha             = 0.01,
   fit_indices       = c("chisq", "df", "pvalue", "cfi", "rmsea", "srmr"),
   d_cfi_threshold   = 0.020, 
-  max_iter          = 1000
+  max_iter          = 1000, 
+  method            = "test_statistic"
 )
 
 # mi_results <- compute_mi_long(
