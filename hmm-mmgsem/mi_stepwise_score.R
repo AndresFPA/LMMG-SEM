@@ -26,6 +26,7 @@ compute_mi_long_stepwise_score <- function(data,
                                            d_cfi_threshold = 0.010,
                                            max_iter = 20,
                                            fit_indices = c("chisq", "df", "pvalue", "cfi", "rmsea", "srmr"),
+                                           specific_noninv = FALSE,
                                            ...) {
   
   method <- match.arg(method)
@@ -66,6 +67,135 @@ compute_mi_long_stepwise_score <- function(data,
     )
 
     return(metric_fit)
+  }
+
+  extract_score_pairs <- function(fit, fixed_val, mode = c("wave", "group"), alpha = 0.05) {
+    mode <- match.arg(mode)
+
+    if (is.null(fit) || !lavaan::lavInspect(fit, "converged")) {
+      return(list(global = character(0), pairs = NULL))
+    }
+
+    ts <- tryCatch(lavTestScore(fit), error = function(e) NULL)
+    if (is.null(ts) || is.null(ts$uni)) {
+      return(list(global = character(0), pairs = NULL))
+    }
+
+    uni_tab <- ts$uni
+    uni_tab <- uni_tab[uni_tab$op == "==", , drop = FALSE]
+    if (nrow(uni_tab) == 0) {
+      return(list(global = character(0), pairs = NULL))
+    }
+
+    uni_tab <- uni_tab[!is.na(uni_tab$p.value), , drop = FALSE]
+    if (nrow(uni_tab) == 0) {
+      return(list(global = character(0), pairs = NULL))
+    }
+
+    corrected_alpha <- alpha / nrow(uni_tab)
+    sig_tests <- uni_tab[uni_tab$p.value < corrected_alpha, , drop = FALSE]
+    if (nrow(sig_tests) == 0) {
+      return(list(global = character(0), pairs = NULL))
+    }
+
+    pt <- lavaan::parTable(fit)
+    grp_labels <- lavaan::lavInspect(fit, "group.label")
+
+    glob_out <- character(0)
+    pair_out <- list()
+
+    for (i in seq_len(nrow(sig_tests))) {
+      p1 <- sig_tests$lhs[i]
+      p2 <- sig_tests$rhs[i]
+
+      row1 <- pt[pt$plabel == p1 | pt$label == p1, , drop = FALSE]
+      row2 <- pt[pt$plabel == p2 | pt$label == p2, , drop = FALSE]
+
+      if (nrow(row1) > 0 && nrow(row2) > 0 && row1$op[1] == "=~") {
+        l_fac <- row1$lhs[1]
+        l_item <- row1$rhs[1]
+        glob_out <- c(glob_out, paste(l_fac, "=~", l_item))
+
+        g1_name <- grp_labels[row1$group[1]]
+        g2_name <- grp_labels[row2$group[1]]
+
+        if (mode == "wave") {
+          c1 <- paste0(g1_name, ".Time", fixed_val)
+          c2 <- paste0(g2_name, ".Time", fixed_val)
+        } else {
+          c1 <- paste0(fixed_val, ".Time", g1_name)
+          c2 <- paste0(fixed_val, ".Time", g2_name)
+        }
+
+        pair_out[[length(pair_out) + 1]] <- data.frame(
+          lhs = l_fac,
+          rhs = l_item,
+          cell1 = c1,
+          cell2 = c2,
+          stringsAsFactors = FALSE
+        )
+      }
+    }
+
+    p_df <- if (length(pair_out) > 0) do.call(rbind, pair_out) else NULL
+    return(list(global = unique(glob_out), pairs = p_df))
+  }
+
+  build_specific_noninv_syntax <- function(base_model, cell_labels, flagged_pairs) {
+    parsed_model <- lavaan::lavaanify(base_model)
+    load_rows <- parsed_model[parsed_model$op == "=~", , drop = FALSE]
+    syntax_lines <- character(0)
+
+    for (fac in unique(load_rows$lhs)) {
+      fac_items <- load_rows$rhs[load_rows$lhs == fac]
+      fac_elements <- character(0)
+
+      for (i in seq_along(fac_items)) {
+        itm <- fac_items[i]
+
+        if (i == 1) {
+          fac_elements <- c(fac_elements, itm)
+          next
+        }
+
+        item_flags <- flagged_pairs[flagged_pairs$lhs == fac & flagged_pairs$rhs == itm, , drop = FALSE]
+
+        lbl_vec <- character(length(cell_labels))
+        for (c_idx in seq_along(cell_labels)) {
+          c_name <- cell_labels[c_idx]
+          in_violation <- any(item_flags$cell1 == c_name | item_flags$cell2 == c_name)
+
+          if (in_violation) {
+            lbl_vec[c_idx] <- paste0("l_", fac, "_", itm, "_", gsub("[^[:alnum:]]", "_", c_name))
+          } else {
+            lbl_vec[c_idx] <- paste0("l_", fac, "_", itm, "_common")
+          }
+        }
+
+        lbl_string <- paste0("c(", paste(lbl_vec, collapse = ", "), ")")
+        fac_elements <- c(fac_elements, paste0(lbl_string, "*", itm))
+      }
+
+      syntax_lines <- c(syntax_lines, paste0(fac, " =~ ", paste(fac_elements, collapse = " + ")))
+    }
+
+    paste(syntax_lines, collapse = "\n")
+  }
+
+  build_specific_metric_model <- function(sub_data, split_var, pair_flags, ...) {
+    if (nrow(pair_flags) == 0) {
+      return(build_metric_model(sub_data, split_var, character(0), ...))
+    }
+
+    cell_labels <- unique(as.character(sub_data[[split_var]]))
+    custom_syntax <- build_specific_noninv_syntax(model, cell_labels, pair_flags)
+
+    lavaan::cfa(
+      model = custom_syntax,
+      data = sub_data,
+      group = split_var,
+      ...
+    )
   }
 
   # Extract the most violated invariance constraint based on how often it is
@@ -179,6 +309,7 @@ compute_mi_long_stepwise_score <- function(data,
                              split_var,
                              label,
                              selection_method,
+                             specific_noninv = FALSE,
                              ...) {
     config_syn <- semTools::measEq.syntax(
       configural.model = model,
@@ -200,7 +331,19 @@ compute_mi_long_stepwise_score <- function(data,
 
     partial_constraints <- character(0)
     history <- list()
-    current_fit <- build_metric_model(sub_data, split_var, partial_constraints, ...)
+    pair_flags <- data.frame(
+      lhs = character(0),
+      rhs = character(0),
+      cell1 = character(0),
+      cell2 = character(0),
+      stringsAsFactors = FALSE
+    )
+
+    if (specific_noninv) {
+      current_fit <- build_specific_metric_model(sub_data, split_var, pair_flags, ...)
+    } else {
+      current_fit <- build_metric_model(sub_data, split_var, partial_constraints, ...)
+    }
 
     iter <- 0
     delta_cfi <- Inf
@@ -218,22 +361,79 @@ compute_mi_long_stepwise_score <- function(data,
         break
       }
 
-      param_name <- parameter_name_from_constraint(current_fit, candidate$lhs, candidate$rhs)
-      if (is.null(param_name) || param_name %in% partial_constraints) {
-        break
+      if (specific_noninv) {
+        if (!"lhs" %in% names(candidate) || !"rhs" %in% names(candidate)) {
+          break
+        }
+
+        pt <- lavaan::parTable(current_fit)
+        row1 <- pt[pt$plabel == candidate$lhs | pt$label == candidate$lhs, , drop = FALSE]
+        row2 <- pt[pt$plabel == candidate$rhs | pt$label == candidate$rhs, , drop = FALSE]
+
+        if (nrow(row1) == 0 || nrow(row2) == 0) {
+          break
+        }
+
+        row1_load <- row1[row1$op == "=~", , drop = FALSE]
+        row2_load <- row2[row2$op == "=~", , drop = FALSE]
+        if (nrow(row1_load) == 0 || nrow(row2_load) == 0) {
+          break
+        }
+
+        group1 <- as.character(unique(row1_load$group))
+        group2 <- as.character(unique(row2_load$group))
+        candidate_key <- paste0(row1_load$lhs[1], "=~", row1_load$rhs[1], "|", group1, "-", group2)
+
+        if (length(group1) == 0 || length(group2) == 0 || group1 == group2) {
+          break
+        }
+
+        same_pair <- any(pair_flags$lhs == row1_load$lhs[1] & pair_flags$rhs == row1_load$rhs[1] &
+                           ((pair_flags$cell1 == group1 & pair_flags$cell2 == group2) |
+                              (pair_flags$cell1 == group2 & pair_flags$cell2 == group1)))
+        if (same_pair) {
+          break
+        }
+
+        pair_flags <- rbind(
+          pair_flags,
+          data.frame(
+            lhs = row1_load$lhs[1],
+            rhs = row1_load$rhs[1],
+            cell1 = group1,
+            cell2 = group2,
+            stringsAsFactors = FALSE
+          )
+        )
+
+        history[[length(history) + 1]] <- list(
+          iter = iter,
+          parameter = paste(row1_load$lhs[1], "=~", row1_load$rhs[1]),
+          groups = c(group1, group2),
+          stat = candidate$X2,
+          p_value = candidate$p.value
+        )
+
+        current_fit <- build_specific_metric_model(sub_data, split_var, pair_flags, ...)
+      } else {
+        param_name <- parameter_name_from_constraint(current_fit, candidate$lhs, candidate$rhs)
+        if (is.null(param_name) || param_name %in% partial_constraints) {
+          break
+        }
+
+        delta_cfi <- if (is.na(config_cfi)) NA_real_ else config_cfi - metric_cfi
+
+        partial_constraints <- c(partial_constraints, param_name)
+        history[[length(history) + 1]] <- list(
+          iter = iter,
+          parameter = param_name,
+          stat = candidate$X2,
+          p_value = candidate$p.value
+        )
+
+        current_fit <- build_metric_model(sub_data, split_var, partial_constraints, ...)
       }
 
-      delta_cfi <- if (is.na(config_cfi)) NA_real_ else config_cfi - metric_cfi
-
-      partial_constraints <- c(partial_constraints, param_name)
-      history[[length(history) + 1]] <- list(
-        iter = iter,
-        parameter = param_name,
-        stat = candidate$X2,
-        p_value = candidate$p.value
-      )
-
-      current_fit <- build_metric_model(sub_data, split_var, partial_constraints, ...)
       metric_cfi <- lavaan::fitMeasures(current_fit, "cfi")
       delta_cfi <- if (is.na(config_cfi)) NA_real_ else config_cfi - metric_cfi
     }
@@ -246,6 +446,7 @@ compute_mi_long_stepwise_score <- function(data,
       config_fit = config_fit,
       metric_fit = current_fit,
       partial_constraints = partial_constraints,
+      pair_flags = pair_flags,
       history = history,
       config_cfi = config_cfi,
       metric_cfi = final_metric_cfi,
@@ -307,6 +508,15 @@ compute_mi_long_stepwise_score <- function(data,
   # ---------------------------------------------------------------------------
   # Step 1: Across groups within each time point
   # ---------------------------------------------------------------------------
+  flagged_global <- character(0)
+  flagged_pairs <- data.frame(
+    lhs = character(0),
+    rhs = character(0),
+    cell1 = character(0),
+    cell2 = character(0),
+    stringsAsFactors = FALSE
+  )
+
   message("Executing Step 1: cross-sectional metric invariance, freeing the strongest violations sequentially...")
   cross_sectional_results <- vector("list", length(unique_times))
   names(cross_sectional_results) <- paste0("Time_", unique_times)
@@ -314,7 +524,17 @@ compute_mi_long_stepwise_score <- function(data,
   pb_1 <- txtProgressBar(min = 0, max = length(unique_times), style = 3)
   for (t in seq_along(unique_times)) {
     sub_data <- data[data[[time_var]] == unique_times[t], , drop = FALSE]
-    result <- stepwise_slice(sub_data, split_var = group_var, label = unique_times[t], selection_method = method, ...)
+    result <- stepwise_slice(sub_data, split_var = group_var, label = unique_times[t], selection_method = method, specific_noninv = specific_noninv, ...)
+
+    if (specific_noninv) {
+      if (nrow(result$pair_flags) > 0) {
+        pair_details <- result$pair_flags
+        pair_details$cell1 <- paste0(pair_details$cell1, ".Time", unique_times[t])
+        pair_details$cell2 <- paste0(pair_details$cell2, ".Time", unique_times[t])
+        flagged_pairs <- rbind(flagged_pairs, pair_details)
+      }
+    }
+
     cross_sectional_results[[t]] <- result
     setTxtProgressBar(pb_1, t)
   }
@@ -330,7 +550,17 @@ compute_mi_long_stepwise_score <- function(data,
   pb_2 <- txtProgressBar(min = 0, max = length(unique_groups), style = 3)
   for (g in seq_along(unique_groups)) {
     sub_data <- data[data[[group_var]] == unique_groups[g], , drop = FALSE]
-    result <- stepwise_slice(sub_data, split_var = time_var, label = unique_groups[g], selection_method = method,...)
+    result <- stepwise_slice(sub_data, split_var = time_var, label = unique_groups[g], selection_method = method, specific_noninv = specific_noninv, ...)
+
+    if (specific_noninv) {
+      if (nrow(result$pair_flags) > 0) {
+        pair_details <- result$pair_flags
+        pair_details$cell1 <- paste0(unique_groups[g], ".Time", pair_details$cell1)
+        pair_details$cell2 <- paste0(unique_groups[g], ".Time", pair_details$cell2)
+        flagged_pairs <- rbind(flagged_pairs, pair_details)
+      }
+    }
+
     longitudinal_results[[g]] <- result
     setTxtProgressBar(pb_2, g)
   }
@@ -354,34 +584,29 @@ compute_mi_long_stepwise_score <- function(data,
   # Final omnibus model across all G x T cells
   # ---------------------------------------------------------------------------
   message("Estimating final omnibus model across all group-by-time cells...")
-#   final_syntax <- semTools::measEq.syntax(
-#     configural.model = model,
-#     data = data,
-#     group = "group_time",
-#     group.equal = "loadings",
-#     group.partial = if (length(final_partials) > 0) final_partials else NULL,
-#     std.lv = FALSE
-#   )
 
-#   final_fit <- lavaan::cfa(
-#     model = as.character(final_syntax),
-#     data = data,
-#     group = "group_time",
-#     ...
-#   )
-  
-  # Reconstruct model syntax to enforce invariant marker variables
-  final_omnibus_model_syntax <- adjust_marker_variables(model, final_partials)
-  
-  final_fit <- lavaan::cfa(
-    model         = final_omnibus_model_syntax,
-    data          = data,
-    group         = "group_time",
-    group.equal   = "loadings",
-    group.partial = if (length(final_partials) > 0) final_partials else NULL,
-    std.lv        = FALSE,
-    ...
-  )
+  if (specific_noninv) {
+    final_omnibus_model_syntax <- build_specific_noninv_syntax(model, all_cells, flagged_pairs)
+
+    final_fit <- lavaan::cfa(
+      model = final_omnibus_model_syntax,
+      data = data,
+      group = "group_time",
+      ...
+    )
+  } else {
+    final_omnibus_model_syntax <- adjust_marker_variables(model, final_partials)
+
+    final_fit <- lavaan::cfa(
+      model         = final_omnibus_model_syntax,
+      data          = data,
+      group         = "group_time",
+      group.equal   = "loadings",
+      group.partial = if (length(final_partials) > 0) final_partials else NULL,
+      std.lv        = FALSE,
+      ...
+    )
+  }
 
   phi_matrices <- lavaan::lavInspect(final_fit, "cov.lv")
 
@@ -408,6 +633,8 @@ compute_mi_long_stepwise_score <- function(data,
     final_syntax = final_omnibus_model_syntax,
     phi_matrices = phi_matrices,
     final_partial_constraints = final_partials,
+    flagged_global = flagged_global,
+    flagged_pairs = flagged_pairs,
     fit_measures = fit_measures_list
   ))
 }
