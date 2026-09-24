@@ -10,6 +10,7 @@ library(lavaan)
 library(MASS)
 library(semTools)
 library(sirt)
+library(dplyr)
 library(tictoc)
 
 # Source data generation function
@@ -27,7 +28,7 @@ source("hmm-mmgsem/mi.R")
 source("hmm-mmgsem/mi_stepwise_score.R")
 
 # Set seed for reproducibility
-set.seed(1)
+set.seed(100)
 
 # ------------------------------------------------------------------------------
 # 2. Simulate Data Using dat_gen()
@@ -77,23 +78,23 @@ S2 <- '
 # ------------------------------------------------------------------------------
 # 4. Step 1: Sequential Measurement Invariance Analysis (compute_mi_long)
 # ------------------------------------------------------------------------------
-tic("FALSE")
-mi_results <- compute_mi_long_stepwise_score(
-  data              = sim_data,
-  model             = S1,
-  group_var         = "Group",
-  time_var          = "Timepoint",
-  alpha             = 0.01,
-  fit_indices       = c("chisq", "df", "pvalue", "cfi", "rmsea", "srmr"),
-  d_cfi_threshold   = 0.020, 
-  max_iter          = 1000, 
-  method            = "test_statistic",
-  specific_noninv   = FALSE 
-)
-toc()
+# tic("FALSE")
+# mi_results <- compute_mi_long_stepwise_score(
+#   data              = sim_data,
+#   model             = S1,
+#   group_var         = "Group",
+#   time_var          = "Timepoint",
+#   alpha             = 0.01,
+#   fit_indices       = c("chisq", "df", "pvalue", "cfi", "rmsea", "srmr"),
+#   d_cfi_threshold   = 0.020, 
+#   max_iter          = 1000, 
+#   method            = "test_statistic",
+#   specific_noninv   = FALSE 
+# )
+# toc()
 
 tic("TRUE")
-mi_results <- compute_mi_long_stepwise_score(
+mi_results_2 <- compute_mi_long_stepwise_score(
   data              = sim_data,
   model             = S1,
   group_var         = "Group",
@@ -123,8 +124,10 @@ toc()
 # ------------------------------------------------------------------------------
 print(mi_results$fit_measures)
 print(sort(mi_results$final_partial_constraints))
-print(round(mi_results$fit_measures$final_model, 4))
-summary(mi_results$final_fit)
+
+mi_results_2$flagged_pairs %>% arrange(lhs, rhs)
+print(round(mi_results_2$fit_measures$final_model, 4))
+summary(mi_results_2$final_fit)
 
 # ------------------------------------------------------------------------------
 # 6. Step 2: Longitudinal Mixture Multi-Group SEM (hmm_mmgsem)
