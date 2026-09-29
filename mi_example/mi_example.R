@@ -28,7 +28,7 @@ source("hmm-mmgsem/mi.R")
 source("hmm-mmgsem/mi_stepwise_score.R")
 
 # Set seed for reproducibility
-set.seed(100)
+set.seed(2)
 
 # ------------------------------------------------------------------------------
 # 2. Simulate Data Using dat_gen()
@@ -78,22 +78,22 @@ S2 <- '
 # ------------------------------------------------------------------------------
 # 4. Step 1: Sequential Measurement Invariance Analysis (compute_mi_long)
 # ------------------------------------------------------------------------------
-# tic("FALSE")
-# mi_results <- compute_mi_long_stepwise_score(
-#   data              = sim_data,
-#   model             = S1,
-#   group_var         = "Group",
-#   time_var          = "Timepoint",
-#   alpha             = 0.01,
-#   fit_indices       = c("chisq", "df", "pvalue", "cfi", "rmsea", "srmr"),
-#   d_cfi_threshold   = 0.020, 
-#   max_iter          = 1000, 
-#   method            = "test_statistic",
-#   specific_noninv   = FALSE 
-# )
-# toc()
+tic("Checking global non-invariances")
+mi_results <- compute_mi_long_stepwise_score(
+  data              = sim_data,
+  model             = S1,
+  group_var         = "Group",
+  time_var          = "Timepoint",
+  alpha             = 0.01,
+  fit_indices       = c("chisq", "df", "pvalue", "cfi", "rmsea", "srmr"),
+  d_cfi_threshold   = 0.020,
+  max_iter          = 1000,
+  method            = "test_statistic",
+  specific_noninv   = FALSE
+)
+toc()
 
-tic("TRUE")
+tic("Checking pairwise non-invariances")
 mi_results_2 <- compute_mi_long_stepwise_score(
   data              = sim_data,
   model             = S1,
@@ -107,6 +107,8 @@ mi_results_2 <- compute_mi_long_stepwise_score(
   specific_noninv   = TRUE 
 )
 toc()
+
+# OLD FUNCTION
 # mi_results <- compute_mi_long(
 #   data              = sim_data,
 #   model             = S1,
