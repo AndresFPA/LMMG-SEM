@@ -1,5 +1,6 @@
 # Source necessary functions
 invisible(lapply(list.files("hmm-mmgsem", pattern = "\\.R$", full.names = TRUE), source))
+source("Simulation/DatGen.R")
 
 # Load final analysis evironment
 load("Simulation/Analyses/Analysis_env.Rdata")
@@ -57,9 +58,21 @@ do_sim <- function(Condition){
   if(k == 0){k <- K}                # If the remainde is 0, we know that k = 50
   cat("\n", "Condition", RowDesign, "out of", nrow(design), "\n")
   
-  # Load the simulated data
-  SimData <- new_load(paste0("C:/Users/User/OneDrive - KU Leuven/0. Postdoc Leuven/1. Papers/Paper 1/R/Simulation/DataRow", RowDesign, "Rep", k, ".Rdata"))
-
+  # Generate new simulated data
+  # Set seed per design condition (row) and replication (K)
+  set.seed((RowDesign * k * 1000))
+  # Generate data
+  #SimData <- do.call(what = DataGeneration, args = design[RowDesign, ])$SimData
+  SimData <- dat_gen(S      = design[RowDesign, "nclus"], 
+                     Time   = design[RowDesign, "ntimes"], 
+                     G      = design[RowDesign, "ngroups"], 
+                     Beta   = design[RowDesign, "coeff"], 
+                     N_g    = design[RowDesign, "N_g"], 
+                     a      = design[RowDesign, "A"],
+                     S_size = design[RowDesign, "S_size"])
+  
+  save(SimData, file = paste("C:/Users/u0159267/OneDrive - KU Leuven/0. Postdoc Leuven/1. Papers/Paper 1/R/Simulation/Extra17_Data/Data", "Row", RowDesign, "Rep", k, ".Rdata", sep = ""))
+  
   # Check that there are no empty categories
   data <- as.data.frame(SimData$data)
   
@@ -94,10 +107,22 @@ do_sim <- function(Condition){
     )
 
   # Save computation times
-  save(ctime, file = paste("Times/Time", "Row", RowDesign, "Rep", k, ".Rdata", sep = ""))
+  # save(ctime, file = paste("C:/Users/User/OneDrive - KU Leuven/0. Postdoc Leuven/1. Papers/Paper 1/R/Simulation/Extra17_Times/Time", "Row", RowDesign, "Rep", k, ".Rdata", sep = ""))
+  save(ctime, file = paste("C:/Users/u0159267/OneDrive - KU Leuven/0. Postdoc Leuven/1. Papers/Paper 1/R/Simulation/Extra17_Times/Time", "Row", RowDesign, "Rep", k, ".Rdata", sep = ""))
   
   # Save results
-  save(fit, file = paste("Fit/Results", "Row", RowDesign, "Rep", k, ".Rdata", sep = ""))
-  
-  results <- results$result
+  # save(fit, file = paste("C:/Users/User/OneDrive - KU Leuven/0. Postdoc Leuven/1. Papers/Paper 1/R/Simulation/Extra17_Fit/Results", "Row", RowDesign, "Rep", k, ".Rdata", sep = ""))
+  save(fit, file = paste("C:/Users/u0159267/OneDrive - KU Leuven/0. Postdoc Leuven/1. Papers/Paper 1/R/Simulation/Extra17_Fit/Results", "Row", RowDesign, "Rep", k, ".Rdata", sep = ""))
 }
+
+#### Run the simulation
+for(cond in non_converged[8:17]){
+  do_sim(Condition = cond)
+}
+
+
+
+
+# Log - 
+# (RowDesign * k * 1000)
+# [8] 12069 - Did not work
