@@ -3,10 +3,6 @@
 library("dplyr")
 library("lavaan")
 
-# Source results
-load("c:/Users/User/OneDrive - KU Leuven/0. Postdoc Leuven/1. Papers/Paper 1/Empirical Example/Data/07-10-workspace.RData")
-load("c:/Users/u0159267/OneDrive - KU Leuven/0. Postdoc Leuven/1. Papers/Paper 1/Empirical Example/Data/07-10-workspace.RData")
-
 # Source necessary functions
 invisible(lapply(list.files("hmm-mmgsem", pattern = "\\.R$", full.names = TRUE), source))
 
