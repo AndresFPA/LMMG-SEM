@@ -101,7 +101,7 @@ EStep_HMM_General <- function(log_liks, log_pi, log_A) {
   
   # Calculate Total Likelihood per group (Normalization Constant)
   # We can just sum alpha at time T over all clusters
-  log_lik_total <- apply(log_alpha[, T_points, ], 1, log_sum_exp)
+  log_lik_total <- apply(log_alpha[, T_points, , drop = F], 1, log_sum_exp)
   
   for (t in 1:T_points) {
     for (k in 1:K_clus) {

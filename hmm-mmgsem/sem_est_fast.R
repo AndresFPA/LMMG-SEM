@@ -116,10 +116,13 @@ sem_est_fast <- function(S2,
   # ----------------------------------------------------------------------------
   # Create an stacked posterior matrix to estimate the structural parameters ACROSS time points
   # This ensures that the cluster labels remain the same across time (i.e., avoid label switching)
-  post_stacked <- c()
-  for(t in 1:ntimes){
-    post_stacked <- rbind(post_stacked, post[, , t])
-  }
+  post_stacked <- do.call(rbind, lapply(seq_len(ntimes), function(t) {
+    matrix(post[, , t], nrow = ngroups, ncol = nclus) # use matrix() to ensure correct dimensions even when k = 1
+  }))
+  # post_stacked <- c()
+  # for(t in 1:ntimes){
+  #   post_stacked <- rbind(post_stacked, post[, , t])
+  # }
   # browser()
   # Obtain weighted group-cluster combination sample size
   N_gks <- post_stacked * N_gs
@@ -303,7 +306,13 @@ sem_est_fast <- function(S2,
   I <- diag(length(lat_var)) # Identity matrix based on number of latent variables. Used later
   
   # Create dummy psi_ks for future inputting 
-  if(i > 1){psi_ks <- psi_gks[, 1]}
+  if(i > 1){
+    if(nclus > 1) {
+      psi_ks <- psi_gks[, 1]
+    } else {
+      psi_ks <- psi_gks[, 1][[1]]
+    }
+  }
  
   # Previous matrices were only cluster-specific. We have to reconstruct the group-specific matrices (psi and sigma)
   for (k in 1:nclus) {
@@ -371,7 +380,7 @@ sem_est_fast <- function(S2,
   for(t in 1:ntimes){
     start_idx <- (((t - 1) * ngroups) + 1)
     end_idx   <- t * ngroups
-    log_liks[[t]] <- loglik_gks[start_idx:end_idx, ] 
+    log_liks[[t]] <- loglik_gks[start_idx:end_idx, , drop = FALSE] 
   }
   
   # Return relevant objects
